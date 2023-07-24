@@ -56,13 +56,13 @@ async function run() {
             const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: "10h" })
             res.send({ token })
         })
-
+        // warning: use verifyJWT before using verifyAdmin
         const verifyAdmin = async (req, res, next) => {
             const email = req.decoded.email;
             const query = { email: email }
             const user = await usersCollection.findOne(query);
             if (user?.role !== 'admin') {
-                return req.status(403).send({ error: true, message: 'forbidden message' });
+                return res.status(403).send({ error: true, message: 'forbidden message' });
             }
             next();
         }
@@ -76,7 +76,7 @@ async function run() {
 
         // users related apis
 
-        app.get('/users', verifyJWT, async (req, res) => {
+        app.get('/users', verifyJWT, verifyAdmin, async (req, res) => {
             const result = await usersCollection.find().toArray();
             res.send(result);
         })
@@ -105,7 +105,6 @@ async function run() {
                 res.send({ admin: false })
             }
 
-
             const query = { email: email }
             const user = await usersCollection.findOne(query);
             const result = { admin: user?.role === 'admin' }
@@ -130,6 +129,19 @@ async function run() {
             res.send(result);
         })
 
+        app.post('/menu', verifyJWT, verifyAdmin, async (req, res) => {
+            const newItem = req.body;
+            const result = await menuCollection.insertOne(newItem);
+            res.send(result);
+        })
+
+        app.delete('/menu/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) }
+            const result = await menuCollection.deleteOne(query);
+            res.send(result);
+        })
+
         // reviews related apis
         app.get('/reviews', async (req, res) => {
             const result = await reviewCollection.find().toArray();
@@ -138,13 +150,14 @@ async function run() {
 
         // cart collection
 
-        app.get('/carts', verifyJWT, verifyAdmin, async (req, res) => {
+        app.get('/carts', verifyJWT, async (req, res) => {
             const email = req.query.email;
             if (!email) {
                 res.send([]);
             }
 
             const decodedEmail = req.decoded.email;
+            console.log(decodedEmail, email);
             if (email !== decodedEmail) {
                 return res.status(403).send({ error: true, message: 'Forbidden access' })
             }
