@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config()
 const app = express();
 const port = process.env.PORT || 5000;
+const stripe = require('stripe')(process.env.PAYMENT_SECRET_KEY)
 
 // middleware
 app.use(cors())
@@ -49,6 +50,7 @@ async function run() {
         const menuCollection = client.db("bistroDB").collection("menu");
         const reviewCollection = client.db("bistroDB").collection("reviews");
         const cartCollection = client.db("bistroDB").collection("carts");
+        const paymentCollection = client.db("bistroDB").collection("payments");
 
         // post token to the server
         app.post('/jwt', (req, res) => {
@@ -171,6 +173,88 @@ async function run() {
             const item = req.body;
             console.log(item);
             const result = await cartCollection.insertOne(item);
+            res.send(result);
+        })
+
+        // create payment intent
+        app.post('/create-payment-intent', verifyJWT, async (req, res) => {
+            const { price } = req.body;
+            const amount = parseInt(price * 100);
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: 'usd',
+                payment_method_types: ['card']
+            })
+            res.send({
+                clientSecret: paymentIntent.client_secret
+            })
+        })
+
+        // payment related api
+        app.post('/payments', verifyJWT, async (req, res) => {
+            const payment = req.body;
+            const insertResult = await paymentCollection.insertOne(payment);
+
+            const query = { _id: { $in: payment.cartItems.map(id => new ObjectId(id)) } }
+            const deleteResult = await cartCollection.deleteMany(query);
+
+            res.status(403).send(insertResult, deleteResult);
+        })
+
+        app.get('/admin-stats', verifyJWT, verifyAdmin, async (req, res) => {
+            const users = await usersCollection.estimatedDocumentCount();
+            const products = await menuCollection.estimatedDocumentCount();
+            const orders = await paymentCollection.estimatedDocumentCount();
+
+            // best way to get sum of the price field is to use group and sum operator
+
+            const payments = await paymentCollection.find().toArray();
+            const price = payments.reduce((sum, payment) => sum + payment.price, 0);
+            const revenue = parseFloat(price.toFixed(2));
+
+
+            res.send({
+                revenue,
+                users,
+                products,
+                orders
+            })
+        })
+
+        app.get('/order-stats', async (req, res) => {
+            const pipeline = [
+                {
+                    $unwind: '$menuItems'
+                },
+                {
+                    $lookup: {
+                        from: 'menu',
+                        localField: 'menuItems',
+                        foreignField: '_id',
+                        as: 'menuItemsData'
+                    }
+                },
+                {
+                    $unwind: '$menuItemsData'
+                },
+                {
+                    $group: {
+                        _id: '$menuItemsData.category',
+                        count: { $sum: 1 },
+                        total: { $sum: '$menuItemsData.price' }
+                    }
+                },
+                {
+                    $project: {
+                        category: '$_id',
+                        count: 1,
+                        total: { $round: ['$total', 2] },
+                        _id: 0
+                    }
+                }
+            ];
+
+            const result = await paymentCollection.aggregate(pipeline).toArray();
             res.send(result);
         })
 
